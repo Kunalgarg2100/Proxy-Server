@@ -46,6 +46,37 @@ while True:
         print 'Got connection from', client_addr
         client_data = client_conn.recv(1024)
         print(client_data)
+        
+        lines = client_data.split('\n')
+        print("client_data",client_data)
+        
+        tokens = lines[0].split()
+        url = lines[0].split()[1]
+        print(url)
+        http_pos = url.find("://")
+        if http_pos != -1:
+            url = url[(http_pos+3):]
+        
+        path_pos = url.find("/")
+        if path_pos == -1:
+            path_pos = len(url)
+        
+        path_url = url[path_pos:] # Getting the url of  the object
+        print(path_url)
+        tokens[1] = path_url
+        lines[0] = ' '.join(tokens)
+        client_data = "\n".join(lines) + '\r\n\r\n' # Generating request to be sent to server
+        
+        port = -1
+        webserver = ""
+        port_pos = url.find(":") # Get port number and server address
+        if port_pos == -1:
+            port = 80
+            webserver = url[:path_pos]
+        else:
+            port = int(url[(port_pos+1):path_pos])
+            webserver = url[:port_pos]
+
 
     except KeyboardInterrupt:
         client_conn.close()
