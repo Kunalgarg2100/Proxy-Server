@@ -77,6 +77,10 @@ while True:
             port = int(url[(port_pos+1):path_pos])
             webserver = url[:port_pos]
 
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.connect((webserver, port))
+        server_socket.sendall(client_data)
+       
 
     except KeyboardInterrupt:
         client_conn.close()
