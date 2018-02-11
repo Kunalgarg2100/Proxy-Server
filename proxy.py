@@ -80,7 +80,14 @@ while True:
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect((webserver, port))
         server_socket.sendall(client_data)
-       
+        
+        reply = server_socket.recv(4096)
+        print("reply", reply)
+        while len(reply):
+            print("reply", reply)
+            client_conn.send(reply)
+            reply = server_socket.recv(1024)
+        client_conn.send("\r\n\r\n")
 
     except KeyboardInterrupt:
         client_conn.close()
