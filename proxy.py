@@ -4,6 +4,8 @@ import socket
 import time
 import os
 import operator
+import thread
+import threading
 
 port = 60004
 host = ""
@@ -12,8 +14,8 @@ CACHE_DIR = "./cache"
 if not os.path.isdir(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
-is_cached = 0 #Checks if file is already cached or not
 cached_dic = {} # Dictionary with file names as keys and their last access time as values
+locks = {}
 proxy_socket = ''
 
 ''' Used to make proxy socket '''
@@ -71,11 +73,13 @@ def get_space_for_cache(filename):
         file_to_deleted = sorted_x[0][0]
 
         ''' Deleting file from cache and cache_list '''
+        acquire_lock(file_to_deleted)
         del cached_dic[file_to_deleted]
         os.remove(CACHE_DIR + "/" + file_to_deleted)
+        release_lock(file_to_deleted)
 
 ''' Used to add filename in cached dictionary '''
-def add_log(filename):
+def add_log(filename,is_cached):
 
     ''' If file is not in cached dictionary '''
     if not filename in cached_dic:
@@ -83,16 +87,18 @@ def add_log(filename):
         get_space_for_cache(filename)
 
         ''' Adds filename and its access time in cached dic '''
+        acquire_lock(filename)
         cached_dic[filename] = time.strptime(time.ctime(), "%a %b %d %H:%M:%S %Y")
-        
+        release_lock(filename)        
         ''' File is not cached before '''
         is_cached = 0
         
     # If file is in cached dictionary
     else:
         ''' Update the access time of file if it is in cached dic '''
+        acquire_lock(filename)
         cached_dic[filename] = time.strptime(time.ctime(), "%a %b %d %H:%M:%S %Y")
-
+        release_lock(filename)
         ''' File is cached before '''
         is_cached = 1
     
@@ -124,6 +130,105 @@ def parse_port_serverurl(url,path_pos):
         webserver = url[:port_pos]
     return port,webserver
 
+def acquire_lock(filename):
+    if filename in locks:
+        lock = locks[filename]
+    else:
+        lock = threading.Lock()
+        locks[filename] = lock
+    lock.acquire()
+
+def release_lock(filename):
+    if filename in locks:
+        lock = locks[filename]
+        lock.release()
+    else:
+        print "Lock problem occured"
+        sys.exit()
+        
+def handle_one_client(client_conn,client_data):
+    lines = client_data.split('\n')
+    print("client_data",client_data)
+    
+    tokens = lines[0].split()
+    url = lines[0].split()[1]
+    #print(url)
+    http_pos = url.find("://")
+    if http_pos != -1:
+        url = url[(http_pos+3):]
+    
+    path_pos = url.find("/")
+    if path_pos == -1:
+        path_pos = len(url)
+    
+    path_url = url[path_pos:] # Getting the url of  the object
+    filename = path_url[1:]
+    print(path_url)
+    tokens[1] = path_url
+    lines[0] = ' '.join(tokens)
+    is_cached = 0;
+    is_cached = add_log(filename,is_cached)
+    print('is_cached' ,is_cached)
+
+    cache_path = CACHE_DIR + '/' + filename
+
+    ''' If file is cached then we modify headers to check if file is modified or not '''
+    if is_cached:
+        modify_header(cache_path, lines)
+
+    ''' Generating request to be sent to server '''
+    client_data = "\r\n".join(lines) + '\r\n\r\n'
+    port,webserver = parse_port_serverurl(url,path_pos)
+
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.connect((webserver, port))
+        server_socket.sendall(client_data)
+        reply = server_socket.recv(4096)
+        print('reply ' ,reply)
+        
+        
+        if "304 Not Modified" in reply:
+            print("Not Modified")
+        else:
+            print("Modified")
+        
+        ''' If file is cached and not modified on the server
+            We read the file from cache '''
+        if is_cached and "304 Not Modified" in reply:
+            acquire_lock(filename)
+            f = open(cache_path, "rb")
+            chunk = f.read(1024)    
+            while len(chunk):
+                client_conn.send(chunk)
+                ''' Read from cache '''
+                chunk = f.read(1024)
+            f.close()
+            release_lock(filename)
+            client_conn.send("\r\n\r\n")
+
+        else:
+            acquire_lock(filename)
+            f = open(cache_path, "w+")
+            while len(reply):
+                client_conn.send(reply)
+                ''' Write to cache '''
+                f.write(reply)
+                reply = server_socket.recv(1024)
+            f.close()
+            release_lock(filename)
+            client_conn.send("\r\n\r\n")
+        server_socket.close()
+        client_conn.close()
+        return
+
+    except Exception as e:
+        server_socket.close()
+        client_conn.close()
+        print e
+        return
+
+
 def start_server():
     proxy_socket = make_proxy_socket()
     while True:
@@ -133,82 +238,7 @@ def start_server():
             client_data = client_conn.recv(1024)
             print(client_data)
             
-            lines = client_data.split('\n')
-            print("client_data",client_data)
-            
-            tokens = lines[0].split()
-            url = lines[0].split()[1]
-            #print(url)
-            http_pos = url.find("://")
-            if http_pos != -1:
-                url = url[(http_pos+3):]
-            
-            path_pos = url.find("/")
-            if path_pos == -1:
-                path_pos = len(url)
-            
-            path_url = url[path_pos:] # Getting the url of  the object
-            filename = path_url[1:]
-            print(path_url)
-            tokens[1] = path_url
-            lines[0] = ' '.join(tokens)
-            
-            
-            is_cached = add_log(filename)
-            print('is_cached' ,is_cached)
-
-            cache_path = CACHE_DIR + '/' + filename
-     
-            ''' If file is cached then we modify headers to check if file is modified or not '''
-            if is_cached:
-                modify_header(cache_path, lines)
-
-            ''' Generating request to be sent to server '''
-            client_data = "\r\n".join(lines) + '\r\n\r\n'
-            port,webserver = parse_port_serverurl(url,path_pos)
-
-            try:
-                server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                server_socket.connect((webserver, port))
-                server_socket.sendall(client_data)
-                reply = server_socket.recv(4096)
-                print('reply ' ,reply)
-                
-                
-                if "304 Not Modified" in reply:
-                    print("Not Modified")
-                else:
-                    print("Modified")
-                
-                ''' If file is cached and not modified on the server
-                    We read the file from cache '''
-                if is_cached and "304 Not Modified" in reply:
-                    f = open(cache_path, "rb")
-                    chunk = f.read(1024)    
-                    while len(chunk):
-                        client_conn.send(chunk)
-                        ''' Read from cache '''
-                        chunk = f.read(1024)
-                    f.close()
-                    client_conn.send("\r\n\r\n")
-
-                else:
-                    f = open(cache_path, "w+")
-                    while len(reply):
-                        client_conn.send(reply)
-                        ''' Write to cache '''
-                        f.write(reply)
-                        reply = server_socket.recv(1024)
-                    f.close()
-                    client_conn.send("\r\n\r\n")
-                server_socket.close()
-                client_conn.close()
-
-            except Exception as e:
-                server_socket.close()
-                client_conn.close()
-                print e
-                return
+            thread.start_new_thread(handle_one_client,(client_conn, client_data))
 
         except KeyboardInterrupt:
             client_conn.close()
