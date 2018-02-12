@@ -7,17 +7,30 @@ import operator
 import thread
 import threading
 
-port = 60004
 host = ""
 MAX_CACHE_SIZE = 3
 CACHE_DIR = "./cache"
 BLACKLIST_FILE = "blacklist.txt"
+
+# take command line argument
+if len(sys.argv) == 1:
+    proxy_port = 12345
+elif len(sys.argv) == 2:
+    try:
+        proxy_port = int(sys.argv[1])
+    except:
+        print "Provide Proper Port Number"
+        raise SystemExit
+else:
+    raise SystemExit
+
 if not os.path.isdir(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
 cached_dic = {} # Dictionary with file names as keys and their last access time as values
 locks = {}
 proxy_socket = ''
+
 
 f = open(BLACKLIST_FILE, "rb")
 data = ""
@@ -47,8 +60,8 @@ def make_proxy_socket():
         # Next bind to the port, we have not typed any ip in the ip field 
         # instead we have inputted an empty string this makes the server listen to requests 
         # coming from other computers on the network
-        proxy_socket.bind((host, port))
-        print "socket binded to %s" %(port)
+        proxy_socket.bind((host, proxy_port))
+        print "socket binded to %s" %(proxy_port)
 
         # put the socket into listening mode
         #5 connections are kept waiting if the server is busy and 
@@ -90,7 +103,7 @@ def get_space_for_cache(filename):
         release_lock(file_to_deleted)
 
 ''' Used to add filename in cached dictionary '''
-def add_log(filename,is_cached):
+def update_cache_dic(filename,is_cached):
 
     ''' If file is not in cached dictionary '''
     if not filename in cached_dic:
@@ -164,11 +177,11 @@ def check_isblocked(server_url,server_port):
         
 def handle_one_client(client_conn,client_data):
     lines = client_data.split('\n')
+    print("Request sent by client")
     print("client_data",client_data)
     
     tokens = lines[0].split()
     url = lines[0].split()[1]
-    #print(url)
     http_pos = url.find("://")
     if http_pos != -1:
         url = url[(http_pos+3):]
@@ -179,12 +192,11 @@ def handle_one_client(client_conn,client_data):
     
     path_url = url[path_pos:] # Getting the url of  the object
     filename = path_url[1:]
-    print(path_url)
+
     tokens[1] = path_url
     lines[0] = ' '.join(tokens)
     is_cached = 0;
-    is_cached = add_log(filename,is_cached)
-    print('is_cached' ,is_cached)
+    is_cached = update_cache_dic(filename,is_cached)
 
     cache_path = CACHE_DIR + '/' + filename
 
@@ -194,6 +206,8 @@ def handle_one_client(client_conn,client_data):
 
     ''' Generating request to be sent to server '''
     client_data = "\r\n".join(lines) + '\r\n\r\n'
+    print 'Request to be send to server'
+    print client_data
     server_port,server_url = parse_port_serverurl(url,path_pos)
 
     if check_isblocked(server_url,server_port):
@@ -209,17 +223,19 @@ def handle_one_client(client_conn,client_data):
         server_socket.connect((server_url, server_port))
         server_socket.sendall(client_data)
         reply = server_socket.recv(4096)
-        print('reply ' ,reply)
+        print "Server Response"
+        print reply
         
         
         if "304 Not Modified" in reply:
-            print("Not Modified")
+            print("Not Modified\n")
         else:
-            print("Modified")
+            print("Modified\n")
         
         ''' If file is cached and not modified on the server
             We read the file from cache '''
         if is_cached and "304 Not Modified" in reply:
+            print "returning cached file %s to %s" % (cache_path, str(client_addr))
             acquire_lock(filename)
             f = open(cache_path, "rb")
             chunk = f.read(1024)    
@@ -232,6 +248,7 @@ def handle_one_client(client_conn,client_data):
             client_conn.send("\r\n\r\n")
 
         else:
+            print "caching file while serving %s to %s" % (cache_path, str(client_addr))
             acquire_lock(filename)
             f = open(cache_path, "w+")
             while len(reply):
@@ -259,14 +276,12 @@ def start_server():
         try:
             client_conn, client_addr = proxy_socket.accept()    
             print 'Got connection from', client_addr
-            client_data = client_conn.recv(1024)
-            print(client_data)
-            
+            client_data = client_conn.recv(1024)            
             thread.start_new_thread(handle_one_client,(client_conn, client_data))
 
         except KeyboardInterrupt:
             client_conn.close()
-            print('Connection closed by client')
+            print 'Connection closed by client'
             proxy_socket.close()
             print "\nProxy server shutting down ..."
             break
