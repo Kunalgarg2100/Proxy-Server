@@ -11,12 +11,23 @@ port = 60004
 host = ""
 MAX_CACHE_SIZE = 3
 CACHE_DIR = "./cache"
+BLACKLIST_FILE = "blacklist.txt"
 if not os.path.isdir(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
 cached_dic = {} # Dictionary with file names as keys and their last access time as values
 locks = {}
 proxy_socket = ''
+
+f = open(BLACKLIST_FILE, "rb")
+data = ""
+while True:
+    chunk = f.read()
+    if not len(chunk):
+        break
+    data += chunk
+f.close()
+blocked = data.split('\n')
 
 ''' Used to make proxy socket '''
 def make_proxy_socket():
@@ -119,16 +130,16 @@ def modify_header(cache_path,lines):
 
 ''' Returns the server address and port number '''
 def parse_port_serverurl(url,path_pos):
-    port = -1
-    webserver = ""
+    server_port = -1
+    server_url = ""
     port_pos = url.find(":") # Get port number and server address
     if port_pos == -1:
-        port = 80
-        webserver = url[:path_pos]
+        server_port = 80
+        server_url = url[:path_pos]
     else:
-        port = int(url[(port_pos+1):path_pos])
-        webserver = url[:port_pos]
-    return port,webserver
+        server_port = int(url[(port_pos+1):path_pos])
+        server_url = url[:port_pos]
+    return server_port,server_url
 
 def acquire_lock(filename):
     if filename in locks:
@@ -145,6 +156,11 @@ def release_lock(filename):
     else:
         print "Lock problem occured"
         sys.exit()
+
+def check_isblocked(server_url,server_port):
+    if server_url + ":" + str(server_port) in blocked:
+        return True
+    return False
         
 def handle_one_client(client_conn,client_data):
     lines = client_data.split('\n')
@@ -178,11 +194,19 @@ def handle_one_client(client_conn,client_data):
 
     ''' Generating request to be sent to server '''
     client_data = "\r\n".join(lines) + '\r\n\r\n'
-    port,webserver = parse_port_serverurl(url,path_pos)
+    server_port,server_url = parse_port_serverurl(url,path_pos)
+
+    if check_isblocked(server_url,server_port):
+        client_conn.send("HTTP/1.0 403 FORBIDDEN\r\n")
+        client_conn.send("Content-Length: 11\r\n")
+        client_conn.send("\r\n")
+        client_conn.send("FORBIDDEN\r\n")
+        client_conn.send("\r\n\r\n")
+        return
 
     try:
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.connect((webserver, port))
+        server_socket.connect((server_url, server_port))
         server_socket.sendall(client_data)
         reply = server_socket.recv(4096)
         print('reply ' ,reply)
