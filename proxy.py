@@ -1,5 +1,3 @@
-# Once connection is setup client can download any number of files.
-
 import socket
 import time
 import os
@@ -223,17 +221,19 @@ def handle_one_client(client_conn,client_data, client_addr):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect((server_url, server_port))
         server_socket.sendall(client_data)
-        ans = ''
-        is_modified = 1
-        do_cache = 0
+        
+        ans = ''        # Contains the whole header information sent by server
+        is_modified = 1 # If file is stored in cache is modified on server it is 1
+        do_cache = 0    # If we can cache the file recieved from the server then it is 1
+        left_part = ''  # Contains message body if any is sent by server
+        
         reply = server_socket.recv(1024)
-        left_part = ''
         while True:
             if '\r\n\r\n' in reply:
                 ans +=  reply.split("\r\n\r\n",1)[0]
                 left_part = reply.split("\r\n\r\n",1)[1]
                 ans + '\r\n\r\n'
-                #client_conn.send(left_part)
+                
             else:
                 ans += reply
             if '304 Not Modified' in reply:
@@ -257,14 +257,15 @@ def handle_one_client(client_conn,client_data, client_addr):
             f = open(cache_path, "rb")
             chunk = f.read(1024)    
             while len(chunk):
+                ''' Sending to client '''
                 client_conn.send(chunk)
                 ''' Read from cache '''
                 chunk = f.read(1024)
             f.close()
             release_lock(filename)
-            #client_conn.send("\r\n\r\n")
 
         else:
+            ''' If Cache-control is set to : must-revalidate '''
             if do_cache:
                 print "Caching file while serving %s to %s\n" % (cache_path, str(client_addr))
                 acquire_lock(filename)
@@ -273,20 +274,27 @@ def handle_one_client(client_conn,client_data, client_addr):
                 f.write(left_part)
                 reply = server_socket.recv(1024)
                 while len(reply):
+                    ''' Sending file to client '''
                     client_conn.send(reply)
+
                     ''' Write to cache '''
                     f.write(reply)
+                    
                     reply = server_socket.recv(1024)
                 f.close()
                 release_lock(filename)
+
+            # If Cache-control is set to : no-cache     
             else:
                 print "Returning without caching file %s to %s\n" % (cache_path, str(client_addr))
                 client_conn.send(left_part)
                 reply = server_socket.recv(1024)
                 while len(reply):
+                    ''' Sending file to client '''
                     client_conn.send(reply)
+                    
+                    ''' Recieving file from server '''
                     reply = server_socket.recv(1024)
-            #client_conn.send("\r\n\r\n")
         server_socket.close()
         client_conn.close()
         return
@@ -299,12 +307,18 @@ def handle_one_client(client_conn,client_data, client_addr):
 
 
 def start_server():
+    ''' Making socket for proxy server '''
     proxy_socket = make_proxy_socket()
     while True:
         try:
+            ''' Accepting connection from client '''
             client_conn, client_addr = proxy_socket.accept()    
             print '\nGot connection from', client_addr
+
+            ''' Recieving client request '''
             client_data = client_conn.recv(1024)
+
+            ''' Starting a new thread for each client ''' 
             thread.start_new_thread(handle_one_client,(client_conn, client_data, client_addr))
 
         except KeyboardInterrupt:
