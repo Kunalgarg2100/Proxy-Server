@@ -6,6 +6,7 @@ import os
 import operator
 import thread
 import threading
+import sys
 
 host = ""
 MAX_CACHE_SIZE = 3
@@ -175,10 +176,10 @@ def check_isblocked(server_url,server_port):
         return True
     return False
         
-def handle_one_client(client_conn,client_data):
+def handle_one_client(client_conn,client_data, client_addr):
     lines = client_data.split('\n')
-    print("Request sent by client")
-    print("client_data",client_data)
+    print "Request sent by client"
+    print client_data
     
     tokens = lines[0].split()
     url = lines[0].split()[1]
@@ -206,8 +207,8 @@ def handle_one_client(client_conn,client_data):
 
     ''' Generating request to be sent to server '''
     client_data = "\r\n".join(lines) + '\r\n\r\n'
-    print 'Request to be send to server'
-    print client_data
+    print '\nRequest to be send to server'
+    print "\r\n".join(lines)
     server_port,server_url = parse_port_serverurl(url,path_pos)
 
     if check_isblocked(server_url,server_port):
@@ -222,20 +223,36 @@ def handle_one_client(client_conn,client_data):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect((server_url, server_port))
         server_socket.sendall(client_data)
-        reply = server_socket.recv(4096)
+        ans = ''
+        is_modified = 1
+        do_cache = 0
+        reply = server_socket.recv(1024)
+        left_part = ''
+        while True:
+            if '\r\n\r\n' in reply:
+                ans +=  reply.split("\r\n\r\n",1)[0]
+                left_part = reply.split("\r\n\r\n",1)[1]
+                ans + '\r\n\r\n'
+                #client_conn.send(left_part)
+            else:
+                ans += reply
+            if '304 Not Modified' in reply:
+                is_modified = 0
+            if 'Cache-control' in reply:
+                if 'must-revalidate' in reply:
+                    do_cache = 1
+                else:
+                    do_cache = 0
+                break
+            reply = server_socket.recv(1024)
+        
         print "Server Response"
-        print reply
-        
-        
-        if "304 Not Modified" in reply:
-            print("Not Modified\n")
-        else:
-            print("Modified\n")
+        print ans
         
         ''' If file is cached and not modified on the server
             We read the file from cache '''
-        if is_cached and "304 Not Modified" in reply:
-            print "returning cached file %s to %s" % (cache_path, str(client_addr))
+        if is_cached and not is_modified:
+            print "Returning cached file %s to %s\n" % (cache_path, str(client_addr))
             acquire_lock(filename)
             f = open(cache_path, "rb")
             chunk = f.read(1024)    
@@ -245,20 +262,31 @@ def handle_one_client(client_conn,client_data):
                 chunk = f.read(1024)
             f.close()
             release_lock(filename)
-            client_conn.send("\r\n\r\n")
+            #client_conn.send("\r\n\r\n")
 
         else:
-            print "caching file while serving %s to %s" % (cache_path, str(client_addr))
-            acquire_lock(filename)
-            f = open(cache_path, "w+")
-            while len(reply):
-                client_conn.send(reply)
-                ''' Write to cache '''
-                f.write(reply)
+            if do_cache:
+                print "Caching file while serving %s to %s\n" % (cache_path, str(client_addr))
+                acquire_lock(filename)
+                f = open(cache_path, "w+")
+                client_conn.send(left_part)
+                f.write(left_part)
                 reply = server_socket.recv(1024)
-            f.close()
-            release_lock(filename)
-            client_conn.send("\r\n\r\n")
+                while len(reply):
+                    client_conn.send(reply)
+                    ''' Write to cache '''
+                    f.write(reply)
+                    reply = server_socket.recv(1024)
+                f.close()
+                release_lock(filename)
+            else:
+                print "Returning without caching file %s to %s\n" % (cache_path, str(client_addr))
+                client_conn.send(left_part)
+                reply = server_socket.recv(1024)
+                while len(reply):
+                    client_conn.send(reply)
+                    reply = server_socket.recv(1024)
+            #client_conn.send("\r\n\r\n")
         server_socket.close()
         client_conn.close()
         return
@@ -275,13 +303,13 @@ def start_server():
     while True:
         try:
             client_conn, client_addr = proxy_socket.accept()    
-            print 'Got connection from', client_addr
-            client_data = client_conn.recv(1024)            
-            thread.start_new_thread(handle_one_client,(client_conn, client_data))
+            print '\nGot connection from', client_addr
+            client_data = client_conn.recv(1024)
+            thread.start_new_thread(handle_one_client,(client_conn, client_data, client_addr))
 
         except KeyboardInterrupt:
             client_conn.close()
-            print 'Connection closed by client'
+            print '\nConnection closed by client'
             proxy_socket.close()
             print "\nProxy server shutting down ..."
             break
