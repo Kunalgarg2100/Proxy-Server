@@ -14,40 +14,47 @@ if not os.path.isdir(CACHE_DIR):
 
 is_cached = 0 #Checks if file is already cached or not
 cached_dic = {} # Dictionary with file names as keys and their last access time as values
+proxy_socket = ''
 
-#Here we made a socket instance and passed it two parameters. 
-#The first parameter is AF_INET and the second one is SOCK_STREAM.
-#AF_INET refers to the address family ipv4
-#Secondly the SOCK_STREAM means connection oriented TCP protocol
-try:
-    proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print "Socket successfully created"
+''' Used to make proxy socket '''
+def make_proxy_socket():
+    '''
+    Here we made a socket instance and passed it two parameters. 
+    The first parameter is AF_INET and the second one is SOCK_STREAM.
+    AF_INET refers to the address family ipv4
+    Secondly the SOCK_STREAM means connection oriented TCP protocol
+    '''
+    try:
+        proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        print "Socket successfully created"
 
-    # Re-use the socket
-    proxy_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    # Next bind to the port, we have not typed any ip in the ip field 
-    # instead we have inputted an empty string this makes the server listen to requests 
-    # coming from other computers on the network
-    proxy_socket.bind((host, port))
-    print "socket binded to %s" %(port)
+        # Re-use the socket
+        proxy_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        # Next bind to the port, we have not typed any ip in the ip field 
+        # instead we have inputted an empty string this makes the server listen to requests 
+        # coming from other computers on the network
+        proxy_socket.bind((host, port))
+        print "socket binded to %s" %(port)
 
-    # put the socket into listening mode
-    #5 connections are kept waiting if the server is busy and 
-    #if a 6th socket trys to connect then the connection is refused.
-    proxy_socket.listen(5)
-    print "socket is listening"
+        # put the socket into listening mode
+        #5 connections are kept waiting if the server is busy and 
+        #if a 6th socket trys to connect then the connection is refused.
+        proxy_socket.listen(5)
+        print "socket is listening"
 
-    print "Serving proxy on %s port %s ..." % (
-            str(proxy_socket.getsockname()[0]),
-            str(proxy_socket.getsockname()[1])
-    )
+        print "Serving proxy on %s port %s ..." % (
+                str(proxy_socket.getsockname()[0]),
+                str(proxy_socket.getsockname()[1])
+        )
 
-    
-except socket.error as err:
-    print "socket creation failed with error %s" %(err)
-    proxy_socket.close()
-    raise SystemExit
+        return proxy_socket
+
+        
+    except socket.error as err:
+        print "socket creation failed with error %s" %(err)
+        proxy_socket.close()
+        raise SystemExit
 
 ''' Used to free space if cached memory is full '''
 def get_space_for_cache(filename):
@@ -117,79 +124,97 @@ def parse_port_serverurl(url,path_pos):
         webserver = url[:port_pos]
     return port,webserver
 
-while True:
-    try:
-        client_conn, client_addr = proxy_socket.accept()    
-        print 'Got connection from', client_addr
-        client_data = client_conn.recv(1024)
-        print(client_data)
-        
-        lines = client_data.split('\n')
-        print("client_data",client_data)
-        
-        tokens = lines[0].split()
-        url = lines[0].split()[1]
-        #print(url)
-        http_pos = url.find("://")
-        if http_pos != -1:
-            url = url[(http_pos+3):]
-        
-        path_pos = url.find("/")
-        if path_pos == -1:
-            path_pos = len(url)
-        
-        path_url = url[path_pos:] # Getting the url of  the object
-        print(path_url)
-        tokens[1] = path_url
-        lines[0] = ' '.join(tokens)
-        
-        
-        is_cached = add_log(path_url[1:])
-        print('is_cached' ,is_cached)
+def start_server():
+    proxy_socket = make_proxy_socket()
+    while True:
+        try:
+            client_conn, client_addr = proxy_socket.accept()    
+            print 'Got connection from', client_addr
+            client_data = client_conn.recv(1024)
+            print(client_data)
+            
+            lines = client_data.split('\n')
+            print("client_data",client_data)
+            
+            tokens = lines[0].split()
+            url = lines[0].split()[1]
+            #print(url)
+            http_pos = url.find("://")
+            if http_pos != -1:
+                url = url[(http_pos+3):]
+            
+            path_pos = url.find("/")
+            if path_pos == -1:
+                path_pos = len(url)
+            
+            path_url = url[path_pos:] # Getting the url of  the object
+            filename = path_url[1:]
+            print(path_url)
+            tokens[1] = path_url
+            lines[0] = ' '.join(tokens)
+            
+            
+            is_cached = add_log(filename)
+            print('is_cached' ,is_cached)
 
-        cache_path = CACHE_DIR + '/' + path_url[1:]
- 
-        ''' If file is cached then we modify headers to check if file is modified or not '''
-        if is_cached:
-            modify_header(cache_path, lines)
+            cache_path = CACHE_DIR + '/' + filename
+     
+            ''' If file is cached then we modify headers to check if file is modified or not '''
+            if is_cached:
+                modify_header(cache_path, lines)
 
-        ''' Generating request to be sent to server '''
-        client_data = "\r\n".join(lines) + '\r\n\r\n'
-        port,webserver = parse_port_serverurl(url,path_pos)
+            ''' Generating request to be sent to server '''
+            client_data = "\r\n".join(lines) + '\r\n\r\n'
+            port,webserver = parse_port_serverurl(url,path_pos)
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.connect((webserver, port))
-        server_socket.sendall(client_data)
-        reply = server_socket.recv(4096)
-        print('reply ' ,reply)
-        
-        if "304 Not Modified" in reply:
-            print("Not Modified")
-        else:
-            print("Modified")
+            try:
+                server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                server_socket.connect((webserver, port))
+                server_socket.sendall(client_data)
+                reply = server_socket.recv(4096)
+                print('reply ' ,reply)
+                
+                
+                if "304 Not Modified" in reply:
+                    print("Not Modified")
+                else:
+                    print("Modified")
+                
+                ''' If file is cached and not modified on the server
+                    We read the file from cache '''
+                if is_cached and "304 Not Modified" in reply:
+                    f = open(cache_path, "rb")
+                    chunk = f.read(1024)    
+                    while len(chunk):
+                        client_conn.send(chunk)
+                        ''' Read from cache '''
+                        chunk = f.read(1024)
+                    f.close()
+                    client_conn.send("\r\n\r\n")
 
-        if is_cached and "304 Not Modified" in reply:
-            f = open(cache_path, "rb")
-            chunk = f.read(1024)    
-            while len(chunk):
-                client_conn.send(chunk)
-                chunk = f.read(1024)
-            f.close()
+                else:
+                    f = open(cache_path, "w+")
+                    while len(reply):
+                        client_conn.send(reply)
+                        ''' Write to cache '''
+                        f.write(reply)
+                        reply = server_socket.recv(1024)
+                    f.close()
+                    client_conn.send("\r\n\r\n")
+                server_socket.close()
+                client_conn.close()
 
-        else:
-            cache_path = CACHE_DIR + '/' + path_url[1:]
-            f = open(cache_path, "w+")
-            while len(reply):
-                client_conn.send(reply)
-                f.write(reply)
-                reply = server_socket.recv(1024)
-            f.close()
-            client_conn.send("\r\n\r\n")           
+            except Exception as e:
+                server_socket.close()
+                client_conn.close()
+                print e
+                return
 
-       
-    except KeyboardInterrupt:
-        client_conn.close()
-        print('Connection closed by client')
-        proxy_socket.close()
-        print "\nProxy server shutting down ..."
-        break
+        except KeyboardInterrupt:
+            client_conn.close()
+            print('Connection closed by client')
+            proxy_socket.close()
+            print "\nProxy server shutting down ..."
+            break
+
+start_server()
