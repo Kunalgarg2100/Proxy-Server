@@ -232,8 +232,7 @@ def handle_one_client(client_conn,client_data, client_addr):
             if '\r\n\r\n' in reply:
                 ans +=  reply.split("\r\n\r\n",1)[0]
                 left_part = reply.split("\r\n\r\n",1)[1]
-                ans + '\r\n\r\n'
-                
+                ans += '\r\n\r\n'
             else:
                 ans += reply
             if '304 Not Modified' in reply:
